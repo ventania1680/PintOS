@@ -71,6 +71,9 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+static struct list sleep_list;
+static int64_t next_tick_to_awake;
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -92,12 +95,16 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+	list_init (&sleep_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+
+  initial_thread->fork_cnt = 0;
+  initial_thread->tid = allocate_tid();
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -175,6 +182,9 @@ thread_create (const char *name, int priority,
 
   ASSERT (function != NULL);
 
+  if (thread_current()->fork_cnt > 30)
+	  return TID_ERROR;
+
   /* Allocate thread. */
   t = palloc_get_page (PAL_ZERO);
   if (t == NULL)
@@ -184,10 +194,20 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+#ifdef USERPROG
+  t->parent=thread_current();
+
+#endif
+
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
      member cannot be observed. */
   old_level = intr_disable ();
+
+
+  t->fork_cnt = t->parent->fork_cnt + 1;
+
+  list_init(&t->file_list);
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -459,6 +479,8 @@ is_thread (struct thread *t)
 static void
 init_thread (struct thread *t, const char *name, int priority)
 {
+	struct thread *pt = NULL;
+	int i;
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
@@ -470,6 +492,21 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
+
+#ifdef USERPROG
+
+  for (i = 0; i < 128; i++)
+	  t->fd[i] = NULL;
+
+  sema_init(&(t->sem_mem_lock), 0);
+  sema_init(&(t->sem_child_lock), 0);
+
+  list_init(&(t->child_list));
+  list_init(&(t->file_list));
+
+  list_push_back(&(running_thread()->child_list), &(t->child_elem));
+
+#endif
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -581,7 +618,76 @@ allocate_tid (void)
 
   return tid;
 }
+
+void
+update_next_tick_to_awake(int64_t ticks)
+{
+	next_tick_to_awake = (next_tick_to_awake > ticks) ? ticks : next_tick_to_awake;
+}
+
+int64_t
+get_next_tick_to_awake(void)
+{
+	return next_tick_to_awake;
+}
+
+void
+thread_sleep(int64_t ticks)
+{
+	struct thread *cur;
+
+	enum intr_level old_level;
+	old_level = intr_disable();
+
+	cur = thread_current();
+	ASSERT(cur != idle_thread);
+
+	update_next_tick_to_awake(cur->wakeup_tick = ticks);
+	list_push_back(&sleep_list, &cur->elem);
+
+	thread_block();
+
+	intr_set_level(old_level);
+}
+
+void
+thread_awake(int64_t wakeup_tick)
+{
+	next_tick_to_awake = INT64_MAX;
+	struct list_elem *e;
+	e = list_begin(&sleep_list);
+	while(e != list_end(&sleep_list)) {
+		struct thread *t = list_entry(e, struct thread, elem);
+
+		if (wakeup_tick >= t->wakeup_tick) {
+			e = list_remove(&t->elem);
+			thread_unblock(t);
+		}
+		else {
+			e = list_next(e);
+			update_next_tick_to_awake(t->wakeup_tick);
+		}
+	}
+}
+
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+bool
+thread_exist_check(const char* filename)
+{
+	struct thread *t = NULL;
+	struct list_elem *e;
+
+	for(e = list_begin(&all_list);
+			e != list_end(&all_list);
+			e = list_next(e)) {
+
+		t = list_entry(e, struct thread, allelem);
+		if(!strcmp(filename, t->name))
+			return true;
+	}
+	return false;
+}

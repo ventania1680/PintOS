@@ -19,7 +19,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/synch.h"
-#include "userprog/syscall.h"//
+#include "userprog/syscall.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -33,8 +33,7 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   tid_t tid;
-  struct list_elem* e;
-  struct thread *t;
+
   char *token = (char*)malloc(sizeof(char)*128);
   char *ptr;
 
@@ -47,9 +46,6 @@ process_execute (const char *file_name)
   strlcpy (token, file_name, PGSIZE);
 
   token = strtok_r(token, " ", &ptr);
-
-  if (filesys_open(token) == NULL)
-	  return -1;
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (token, PRI_DEFAULT, start_process, fn_copy);
@@ -375,6 +371,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
           break;
         }
     }  
+
 
   /* Set up stack. */
   if (!setup_stack (esp))

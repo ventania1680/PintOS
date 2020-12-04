@@ -4,6 +4,10 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include "synch.h"
+
+struct lock me_lock;
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -96,10 +100,27 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+	struct semaphore sem_child_lock;
+	struct semaphore sem_mem_lock;
+	struct list child_list;
+	struct list_elem child_elem;
+	int exit_status;
+	struct file* fd[128];
+
+	struct list file_list;
+	tid_t waitfor;
+
+	int fork_cnt;
+	struct thread* parent;
+
+	bool init_childlist_flag;
+	bool exit_accepted;
+
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+	int64_t wakeup_tick;
   };
 
 /* If false (default), use round-robin scheduler.
@@ -137,5 +158,12 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+bool thread_exist_check(const char* filename);
+
+void thread_sleep(int64_t ticks);
+void thread_awake(int64_t ticks);
+int64_t get_next_tick_to_awake(void);
+void update_next_tick_to_awake(int64_t ticks);
 
 #endif /* threads/thread.h */
